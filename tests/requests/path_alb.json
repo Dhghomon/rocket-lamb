@@ -15,6 +15,8 @@
         "X-Forwarded-Proto": "https"
     },
     "queryStringParameters": {},
+    "multiValueQueryStringParameters":  {},
+    "multiValueHeaders":  {},
     "body": "",
     "isBase64Encoded": false
 }

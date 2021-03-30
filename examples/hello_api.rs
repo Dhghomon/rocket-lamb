@@ -1,5 +1,3 @@
-#![feature(proc_macro_hygiene, decl_macro)]
-
 #[macro_use]
 extern crate rocket;
 use rocket_lamb::RocketExt;
@@ -9,9 +7,10 @@ fn hello() -> &'static str {
     "Hello, world!"
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     rocket::ignite()
         .mount("/hello", routes![hello])
         .lambda()
-        .launch();
+        .launch().await;
 }

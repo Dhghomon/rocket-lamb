@@ -1,10 +1,9 @@
-#![feature(proc_macro_hygiene, decl_macro)]
-
 #[macro_use]
 extern crate rocket;
 
-use lambda_http::{Body, Handler, Request, Response};
-use lambda_runtime::Context;
+use aws_lambda_events::encodings::Body;
+use lamedh_http::{Handler, Request, Response};
+use lamedh_runtime::Context;
 use rocket_lamb::{ResponseType, RocketExt};
 use std::error::Error;
 use std::fs::File;
@@ -35,15 +34,15 @@ fn make_rocket() -> rocket::Rocket {
 
 fn get_request(json_file: &'static str) -> Result<Request, Box<dyn Error>> {
     let file = File::open(format!("tests/requests/{}.json", json_file))?;
-    Ok(lambda_http::request::from_reader(file)?)
+    Ok(lamedh_http::request::from_reader(file)?)
 }
 
-#[test]
-fn ok_auto_text() -> Result<(), Box<dyn Error>> {
-    let mut handler = make_rocket().lambda().into_handler();
+#[tokio::test]
+async fn ok_auto_text() -> Result<(), Box<dyn Error>> {
+    let mut handler = make_rocket().lambda().into_handler().await;
 
     let req = get_request("upper")?;
-    let res = handler.run(req, Context::default())?;
+    let res = handler.call(req, Context::default()).await?;
 
     assert_eq!(res.status(), 200);
     assert_header(&res, "content-type", "text/plain; charset=utf-8");
@@ -51,12 +50,12 @@ fn ok_auto_text() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
-fn ok_auto_binary() -> Result<(), Box<dyn Error>> {
-    let mut handler = make_rocket().lambda().into_handler();
+#[tokio::test]
+async fn ok_auto_binary() -> Result<(), Box<dyn Error>> {
+    let mut handler = make_rocket().lambda().into_handler().await;
 
     let req = get_request("binary")?;
-    let res = handler.run(req, Context::default())?;
+    let res = handler.call(req, Context::default()).await?;
 
     assert_eq!(res.status(), 200);
     assert_header(&res, "content-type", "application/octet-stream");
@@ -64,15 +63,15 @@ fn ok_auto_binary() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
-fn ok_default_binary() -> Result<(), Box<dyn Error>> {
+#[tokio::test]
+async fn ok_default_binary() -> Result<(), Box<dyn Error>> {
     let mut handler = make_rocket()
         .lambda()
         .default_response_type(ResponseType::Binary)
-        .into_handler();
+        .into_handler().await;
 
     let req = get_request("upper")?;
-    let res = handler.run(req, Context::default())?;
+    let res = handler.call(req, Context::default()).await?;
 
     assert_eq!(res.status(), 200);
     assert_header(&res, "content-type", "text/plain; charset=utf-8");
@@ -83,15 +82,15 @@ fn ok_default_binary() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
-fn ok_type_binary() -> Result<(), Box<dyn Error>> {
+#[tokio::test]
+async fn ok_type_binary() -> Result<(), Box<dyn Error>> {
     let mut handler = make_rocket()
         .lambda()
         .response_type("TEXT/PLAIN", ResponseType::Binary)
-        .into_handler();
+        .into_handler().await;
 
     let req = get_request("upper")?;
-    let res = handler.run(req, Context::default())?;
+    let res = handler.call(req, Context::default()).await?;
 
     assert_eq!(res.status(), 200);
     assert_header(&res, "content-type", "text/plain; charset=utf-8");
@@ -102,12 +101,12 @@ fn ok_type_binary() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
-fn request_not_found() -> Result<(), Box<dyn Error>> {
-    let mut handler = make_rocket().lambda().into_handler();
+#[tokio::test]
+async fn request_not_found() -> Result<(), Box<dyn Error>> {
+    let mut handler = make_rocket().lambda().into_handler().await;
 
     let req = get_request("not_found")?;
-    let res = handler.run(req, Context::default())?;
+    let res = handler.call(req, Context::default()).await?;
 
     assert_eq!(res.status(), 404);
     assert_eq!(res.headers().contains_key("content-type"), false);

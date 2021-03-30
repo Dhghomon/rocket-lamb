@@ -8,8 +8,6 @@ This *should* also work with requests from an AWS Application Load Balancer, but
 ## Usage
 
 ```rust,no_run
-#![feature(proc_macro_hygiene, decl_macro)]
-
 #[macro_use] extern crate rocket;
 use rocket_lamb::RocketExt;
 
@@ -18,11 +16,12 @@ fn hello() -> &'static str {
     "Hello, world!"
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     rocket::ignite()
         .mount("/hello", routes![hello])
         .lambda() // launch the Rocket as a Lambda
-        .launch();
+        .launch().await;
 }
 ```
 */
