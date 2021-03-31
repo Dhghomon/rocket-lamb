@@ -1,13 +1,17 @@
-use std::{collections::HashMap, future::Future};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::{collections::HashMap, future::Future};
 
-use aws_lambda_events::{encodings::Body, event::apigw::{ApiGatewayProxyRequestContext, ApiGatewayRequestIdentity}};
-use lamedh_http::{Handler, Request, RequestExt, Response, request::RequestContext};
+use aws_lambda_events::{
+    encodings::Body,
+    event::apigw::{ApiGatewayProxyRequestContext, ApiGatewayRequestIdentity},
+};
+use lamedh_http::{request::RequestContext, Handler, Request, RequestExt, Response};
 use lamedh_runtime::Context;
-use rocket::http::{uri::Uri, Header};
+use rocket::http::{Header, uri::{Origin, Uri}};
 use rocket::local::asynchronous::{Client, LocalRequest, LocalResponse};
 use rocket::{Rocket, Route};
+use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::config::*;
@@ -97,8 +101,9 @@ async fn get_client_from_lazy(
             let client = if config.base_path_behaviour == BasePathBehaviour::RemountAndInclude
                 && !base_path.is_empty()
             {
+                let origin = Origin::parse(&base_path).expect("Base path needs to be parseable into Origin");
                 let routes: Vec<Route> = r.routes().cloned().collect();
-                let rocket = r.mount(&base_path, routes);
+                let rocket = r.mount(origin, routes);
                 Client::untracked(rocket).await.unwrap()
             } else {
                 Client::untracked(r).await.unwrap()
@@ -125,11 +130,9 @@ fn create_rocket_request(
             Err(_) => return Err(invalid_request!("invalid value for header '{}'", name)),
         }
     }
-    local_req.set_body(req.into_body());
     for (name, value) in map_request_context_to_headers(req.request_context()) {
         local_req.add_header(Header::new(name, value));
     }
-
     local_req.set_body(req.into_body());
     Ok(local_req)
 }
@@ -191,57 +194,79 @@ fn to_rocket_method(method: &http::Method) -> Result<rocket::http::Method, Rocke
 fn map_request_context_to_headers(req_ctx: RequestContext) -> HashMap<String, String> {
     let mut headers = HashMap::new();
     match req_ctx {
-        RequestContext::ApiGatewayV1(ctx) => {} //I don't think V2 can be a proxy?
-        RequestContext::ApiGatewayV2(ctx) => {
+        RequestContext::ApiGatewayV1(ctx) => {
             add_api_gw_v1_headers(ctx, &mut headers);
         }
-        RequestContext::Alb (ctx) => {
-            if(ctx.elb.target_group_arn.is_some())
-            headers.insert(
-                "x-amz-req-ctx-target-group-arn".to_string(),
-                ctx.elb.target_group_arn,
-            );
+        RequestContext::Alb(ctx) => {
+            if ctx.elb.target_group_arn.is_some() {
+                headers.insert(
+                    "x-amz-req-ctx-target-group-arn".to_string(),
+                    ctx.elb.target_group_arn.unwrap(),
+                );
+            }
         }
-        }
-    }
+        RequestContext::ApiGatewayV2(_) => (), //I don't think V2 can be a proxy?
+    };
     headers
 }
 
-fn add_api_gw_v1_headers(ctx: ApiGatewayProxyRequestContext<Value>, headers: &mut HashMap<String, String>) {
-    if (ctx.account_id.is_some()) {
-        headers.insert("x-amz-req-ctx-account-id".to_string(), account_id).unwrap();
+fn add_api_gw_v1_headers(
+    ctx: ApiGatewayProxyRequestContext<Value>,
+    headers: &mut HashMap<String, String>,
+) {
+    if ctx.account_id.is_some() {
+        headers
+            .insert("x-amz-req-ctx-account-id".to_string(), ctx.account_id.unwrap());
     }
-    if (ctx.resource_id.is_some()) {
-        headers.insert("x-amz-req-ctx-resource-id".to_string(), resource_id.unwrap());
+    if ctx.resource_id.is_some() {
+        headers.insert(
+            "x-amz-req-ctx-resource-id".to_string(),
+            ctx.resource_id.unwrap(),
+        );
     }
-    if (ctx.stage.is_some()){
-        headers.insert("x-amz-req-ctx-stage".to_string(), stage.unwrap());
+    if ctx.stage.is_some() {
+        headers.insert("x-amz-req-ctx-stage".to_string(), ctx.stage.unwrap());
     }
-    if (ctx.domain_name.is_some()){
-        headers.insert("x-amz-req-ctx-domain-name".to_string(), domain_name.unwrap());
+    if ctx.domain_name.is_some() {
+        headers.insert(
+            "x-amz-req-ctx-domain-name".to_string(),
+            ctx.domain_name.unwrap(),
+        );
     }
-    if (ctx.domain_prefix.is_some()){
-        headers.insert("x-amz-req-ctx-domain-prefix".to_string(), domain_prefix.unwrap());
+    if ctx.domain_prefix.is_some() {
+        headers.insert(
+            "x-amz-req-ctx-domain-prefix".to_string(),
+            ctx.domain_prefix.unwrap(),
+        );
     }
-    if (ctx.protocol.is_some()){
-        headers.insert("x-amz-req-ctx-protocol".to_string(), protocol.unwrap());
+    if ctx.protocol.is_some() {
+        headers.insert("x-amz-req-ctx-protocol".to_string(), ctx.protocol.unwrap());
     }
-    add_identity_ctx_headers(&mut headers, ctx.identity);
-    if (ctx.resource_path.is_some()){
-        headers.insert("x-amz-req-ctx-resource-path".to_string(), resource_path.unwrap());
+    add_identity_ctx_headers(headers, ctx.identity);
+    if ctx.resource_path.is_some() {
+        headers.insert(
+            "x-amz-req-ctx-resource-path".to_string(),
+            ctx.resource_path.unwrap(),
+        );
     }
     ctx.authorizer.iter().for_each(|(k, v)| {
         headers.insert(format!("x-amz-req-ctx-auth-{}", k), v.to_string());
     });
-    if (ctx.request_time.is_some()){
-        headers.insert("x-amz-req-ctx-request-time".to_string(), request_time.unwrap());
+    if ctx.request_time.is_some() {
+        headers.insert(
+            "x-amz-req-ctx-request-time".to_string(),
+            ctx.request_time.unwrap(),
+        );
     }
-    if (ctx.apiid.is_some()){
-        headers.insert("x-amz-req-ctx-apiid".to_string(), apiid.unwrap());
+    if ctx.apiid.is_some() {
+        headers.insert("x-amz-req-ctx-apiid".to_string(), ctx.apiid.unwrap());
     }
 }
 
-fn add_identity_ctx_headers(headers: &mut HashMap<String, String>, identity: ApiGatewayRequestIdentity) {
+fn add_identity_ctx_headers(
+    headers: &mut HashMap<String, String>,
+    identity: ApiGatewayRequestIdentity,
+) {
     if identity.cognito_identity_pool_id.is_some() {
         headers.insert(
             "x-amz-req-ctx-id-cognito-identity-pool-id".to_string(),
