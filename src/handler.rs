@@ -250,7 +250,7 @@ fn add_api_gw_v1_headers(
         );
     }
     ctx.authorizer.iter().for_each(|(k, v)| {
-        headers.insert(format!("x-amz-req-ctx-auth-{}", k), format!("{}", v.as_str().unwrap()));
+        headers.insert(format!("x-amz-req-ctx-auth-{}", k), strip_quotes(v.to_string()));
     });
     if ctx.request_time.is_some() {
         headers.insert(
@@ -261,6 +261,10 @@ fn add_api_gw_v1_headers(
     if ctx.apiid.is_some() {
         headers.insert("x-amz-req-ctx-apiid".to_string(), ctx.apiid.unwrap());
     }
+}
+
+fn strip_quotes(quoted: String) -> String {
+    quoted.replace("\"","")
 }
 
 fn add_identity_ctx_headers(
