@@ -250,7 +250,7 @@ fn add_api_gw_v1_headers(
         );
     }
     ctx.authorizer.iter().for_each(|(k, v)| {
-        headers.insert(format!("x-amz-req-ctx-auth-{}", k), v.to_string());
+        headers.insert(format!("x-amz-req-ctx-auth-{}", k), v.as_str().map(|s| s.to_string()).unwrap_or_else(||v.to_string()));
     });
     if ctx.request_time.is_some() {
         headers.insert(
