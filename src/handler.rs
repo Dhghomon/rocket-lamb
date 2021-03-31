@@ -2,9 +2,8 @@ use std::{collections::HashMap, future::Future};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use aws_lambda_events::encodings::Body;
-use lambda_http::request::{Identity, RequestContext};
-use lamedh_http::{Handler, Request, RequestExt, Response};
+use aws_lambda_events::{encodings::Body, event::apigw::{ApiGatewayProxyRequestContext, ApiGatewayRequestIdentity}};
+use lamedh_http::{Handler, Request, RequestExt, Response, request::RequestContext};
 use lamedh_runtime::Context;
 use rocket::http::{uri::Uri, Header};
 use rocket::local::asynchronous::{Client, LocalRequest, LocalResponse};
@@ -192,67 +191,73 @@ fn to_rocket_method(method: &http::Method) -> Result<rocket::http::Method, Rocke
 fn map_request_context_to_headers(req_ctx: RequestContext) -> HashMap<String, String> {
     let mut headers = HashMap::new();
     match req_ctx {
-        RequestContext::ApiGateway {
-            account_id,
-            resource_id,
-            stage,
-            request_id,
-            resource_path: _,
-            http_method: _,
-            authorizer,
-            api_id,
-            identity,
-        } => {
-            headers.insert("x-amz-req-ctx-account-id".to_string(), account_id);
-            headers.insert("x-amz-req-ctx-resource-id".to_string(), resource_id);
-            headers.insert("x-amz-req-ctx-stage".to_string(), stage);
-            headers.insert("x-amz-req-ctx-request-id".to_string(), request_id);
-            headers.insert("x-amz-req-ctx-api-id".to_string(), api_id);
-            authorizer.iter().for_each(|(k, v)| {
-                headers.insert(format!("x-amz-req-ctx-auth-{}", k), v.to_string());
-            });
-            add_identity_ctx_headers(&mut headers, identity);
+        RequestContext::ApiGatewayV1(ctx) => {} //I don't think V2 can be a proxy?
+        RequestContext::ApiGatewayV2(ctx) => {
+            add_api_gw_v1_headers(ctx, &mut headers);
         }
-        RequestContext::Alb { elb } => {
+        RequestContext::Alb (ctx) => {
+            if(ctx.elb.target_group_arn.is_some())
             headers.insert(
                 "x-amz-req-ctx-target-group-arn".to_string(),
-                elb.target_group_arn,
+                ctx.elb.target_group_arn,
             );
+        }
         }
     }
     headers
 }
 
-fn add_identity_ctx_headers(headers: &mut HashMap<String, String>, identity: Identity) {
-    headers.insert("x-amz-req-ctx-id-source-ip".to_string(), identity.source_ip);
-    if identity.cognito_identity_id.is_some() {
-        headers.insert(
-            "x-amz-req-ctx-id-cognito-identity-id".to_string(),
-            identity.cognito_identity_id.unwrap(),
-        );
+fn add_api_gw_v1_headers(ctx: ApiGatewayProxyRequestContext<Value>, headers: &mut HashMap<String, String>) {
+    if (ctx.account_id.is_some()) {
+        headers.insert("x-amz-req-ctx-account-id".to_string(), account_id).unwrap();
     }
+    if (ctx.resource_id.is_some()) {
+        headers.insert("x-amz-req-ctx-resource-id".to_string(), resource_id.unwrap());
+    }
+    if (ctx.stage.is_some()){
+        headers.insert("x-amz-req-ctx-stage".to_string(), stage.unwrap());
+    }
+    if (ctx.domain_name.is_some()){
+        headers.insert("x-amz-req-ctx-domain-name".to_string(), domain_name.unwrap());
+    }
+    if (ctx.domain_prefix.is_some()){
+        headers.insert("x-amz-req-ctx-domain-prefix".to_string(), domain_prefix.unwrap());
+    }
+    if (ctx.protocol.is_some()){
+        headers.insert("x-amz-req-ctx-protocol".to_string(), protocol.unwrap());
+    }
+    add_identity_ctx_headers(&mut headers, ctx.identity);
+    if (ctx.resource_path.is_some()){
+        headers.insert("x-amz-req-ctx-resource-path".to_string(), resource_path.unwrap());
+    }
+    ctx.authorizer.iter().for_each(|(k, v)| {
+        headers.insert(format!("x-amz-req-ctx-auth-{}", k), v.to_string());
+    });
+    if (ctx.request_time.is_some()){
+        headers.insert("x-amz-req-ctx-request-time".to_string(), request_time.unwrap());
+    }
+    if (ctx.apiid.is_some()){
+        headers.insert("x-amz-req-ctx-apiid".to_string(), apiid.unwrap());
+    }
+}
+
+fn add_identity_ctx_headers(headers: &mut HashMap<String, String>, identity: ApiGatewayRequestIdentity) {
     if identity.cognito_identity_pool_id.is_some() {
         headers.insert(
             "x-amz-req-ctx-id-cognito-identity-pool-id".to_string(),
             identity.cognito_identity_pool_id.unwrap(),
         );
     }
-    if identity.cognito_authentication_provider.is_some() {
-        headers.insert(
-            "x-amz-req-ctx-id-cognito-authentication-provider".to_string(),
-            identity.cognito_authentication_provider.unwrap(),
-        );
-    }
-    if identity.cognito_authentication_type.is_some() {
-        headers.insert(
-            "x-amz-req-ctx-id-cognito-authentication-type".to_string(),
-            identity.cognito_authentication_type.unwrap(),
-        );
-    }
     if identity.account_id.is_some() {
         headers.insert(
             "x-amz-req-ctx-id-account-id".to_string(),
             identity.account_id.unwrap(),
+        );
+    }
+    if identity.cognito_identity_id.is_some() {
+        headers.insert(
+            "x-amz-req-ctx-id-cognito-identity-id".to_string(),
+            identity.cognito_identity_id.unwrap(),
         );
     }
     if identity.caller.is_some() {
@@ -273,13 +278,22 @@ fn add_identity_ctx_headers(headers: &mut HashMap<String, String>, identity: Ide
             identity.access_key.unwrap(),
         );
     }
-    if identity.user.is_some() {
-        headers.insert("x-amz-req-ctx-id-user".to_string(), identity.user.unwrap());
-    }
-    if identity.user_agent.is_some() {
+    if identity.source_ip.is_some() {
         headers.insert(
-            "x-amz-req-ctx-id-user-agent".to_string(),
-            identity.user_agent.unwrap(),
+            "x-amz-req-ctx-id-source-ip".to_string(),
+            identity.source_ip.unwrap(),
+        );
+    }
+    if identity.cognito_authentication_type.is_some() {
+        headers.insert(
+            "x-amz-req-ctx-id-cognito-authentication-type".to_string(),
+            identity.cognito_authentication_type.unwrap(),
+        );
+    }
+    if identity.cognito_authentication_provider.is_some() {
+        headers.insert(
+            "x-amz-req-ctx-id-cognito-authentication-provider".to_string(),
+            identity.cognito_authentication_provider.unwrap(),
         );
     }
     if identity.user_arn.is_some() {
@@ -287,5 +301,14 @@ fn add_identity_ctx_headers(headers: &mut HashMap<String, String>, identity: Ide
             "x-amz-req-ctx-id-user-arn".to_string(),
             identity.user_arn.unwrap(),
         );
+    }
+    if identity.user_agent.is_some() {
+        headers.insert(
+            "x-amz-req-ctx-id-user-agent".to_string(),
+            identity.user_agent.unwrap(),
+        );
+    }
+    if identity.user.is_some() {
+        headers.insert("x-amz-req-ctx-id-user".to_string(), identity.user.unwrap());
     }
 }
