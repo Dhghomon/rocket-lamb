@@ -1,6 +1,10 @@
+use aws_lambda_events::event::apigw::{
+    ApiGatewayProxyRequestContext, ApiGatewayV2httpRequestContext,
+    ApiGatewayV2httpRequestContextHttpDescription,
+};
 use http::header::HOST;
-use lambda_http::request::RequestContext;
-use lambda_http::{Request, RequestExt as _};
+use lamedh_http::request::RequestContext;
+use lamedh_http::{Request, RequestExt as _};
 
 pub(crate) trait RequestExt {
     fn full_path(&self) -> String;
@@ -12,7 +16,9 @@ pub(crate) trait RequestExt {
 
 impl RequestExt for Request {
     fn full_path(&self) -> String {
-        if self.request_context().is_alb() || !is_default_api_gateway_url(self) {
+        if matches!(self.request_context(), RequestContext::Alb(_))
+            || !is_default_api_gateway_url(self)
+        {
             self.uri().path().to_owned()
         } else {
             let mut path = self.base_path();
@@ -22,33 +28,35 @@ impl RequestExt for Request {
     }
 
     fn base_path(&self) -> String {
-        match self.request_context() {
-            RequestContext::ApiGateway {
+        let (stage, path) = match self.request_context() {
+            RequestContext::ApiGatewayV1(ApiGatewayProxyRequestContext {
                 stage,
                 resource_path,
                 ..
-            } => {
-                if is_default_api_gateway_url(self) {
-                    format!("/{}", stage)
-                } else {
-                    let resource_path = populate_resource_path(self, resource_path);
-                    let full_path = self.uri().path();
-                    let resource_path_index =
-                        full_path.rfind(&resource_path).unwrap_or_else(|| {
-                            panic!(
-                                "Could not find segment '{}' in path '{}'.",
-                                resource_path, full_path
-                            )
-                        });
-                    full_path[..resource_path_index].to_owned()
-                }
-            }
-            RequestContext::Alb { .. } => String::new(),
+            }) => (stage, resource_path),
+            RequestContext::ApiGatewayV2(ApiGatewayV2httpRequestContext {
+                stage,
+                http: ApiGatewayV2httpRequestContextHttpDescription { path, .. },
+                ..
+            }) => (stage, path),
+            RequestContext::Alb(..) => (None, None),
+        };
+        if is_default_api_gateway_url(self) {
+            format!("/{}", stage.unwrap_or_else(|| "".to_string()))
+        } else {
+            let path = populate_resource_path(self, path.unwrap_or_else(|| "".to_string()));
+            let full_path = self.uri().path();
+            let resource_path_index = full_path.rfind(&path).unwrap_or_else(|| {
+                panic!("Could not find segment '{}' in path '{}'.", path, full_path)
+            });
+            full_path[..resource_path_index].to_owned()
         }
     }
 
     fn api_path(&self) -> &str {
-        if self.request_context().is_alb() || is_default_api_gateway_url(self) {
+        if matches!(self.request_context(), RequestContext::Alb(_))
+            || is_default_api_gateway_url(self)
+        {
             self.uri().path()
         } else {
             &self.uri().path()[self.base_path().len()..]
