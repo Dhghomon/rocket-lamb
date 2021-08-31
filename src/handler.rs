@@ -8,7 +8,7 @@ use aws_lambda_events::{
 };
 use lamedh_http::{request::RequestContext, Handler, Request, RequestExt, Response};
 use lamedh_runtime::Context;
-use rocket::http::{Header, uri::{Origin, Uri}};
+use rocket::http::{Header, RawStr, uri::Origin};
 use rocket::local::asynchronous::{Client, LocalRequest, LocalResponse};
 use rocket::{Rocket, Route, Build};
 use serde_json::Value;
@@ -66,10 +66,8 @@ fn get_path_and_query(config: &Config, req: &Request) -> String {
             uri.push_str(&format!(
                 "{}{}={}",
                 separator,
-                key,
-                value
-                // Uri::percent_encode(key), TODO: Redo this if it compiles
-                // Uri::percent_encode(value)
+                RawStr::new(key).percent_encode(),
+                RawStr::new(value).percent_encode()
             ));
             separator = '&';
         }
