@@ -1,11 +1,17 @@
+use std::sync::Arc;
+
+use lamedh_http::handler;
+use lamedh_runtime::run;
+use rocket::{Rocket, Build};
+use tokio::sync::Mutex;
+
 use crate::config::*;
-use crate::handler::{LazyClient, RocketHandler};
-use lambda_http::lambda;
-use rocket::Rocket;
+use crate::handler::RocketHandler;
+use crate::LazyClient;
 
 /// A builder to create and configure a [RocketHandler](RocketHandler).
 pub struct RocketHandlerBuilder {
-    rocket: Rocket,
+    rocket: Rocket<Build>,
     config: Config,
 }
 
@@ -19,7 +25,7 @@ impl RocketHandlerBuilder {
     ///
     /// let builder = RocketHandlerBuilder::new(rocket::ignite());
     /// ```
-    pub fn new(rocket: rocket::Rocket) -> RocketHandlerBuilder {
+    pub fn new(rocket: rocket::Rocket<Build>) -> RocketHandlerBuilder {
         RocketHandlerBuilder {
             rocket,
             config: Config::default(),
@@ -34,15 +40,16 @@ impl RocketHandlerBuilder {
     ///
     /// ```rust,no_run
     /// use rocket_lamb::RocketExt;
-    /// use lambda_http::lambda;
+    /// use lamedh_runtime::run;
+    /// use lamedh_http::handler;
     ///
-    /// let handler = rocket::ignite().lambda().into_handler();
-    /// lambda!(handler);
+    /// let rocket_handler = tokio_test::block_on(rocket::ignite().lambda().into_handler());
+    /// run(handler(rocket_handler));
     /// ```
-    pub fn into_handler(self) -> RocketHandler {
+    pub async fn into_handler(self) -> RocketHandler {
         RocketHandler {
-            client: LazyClient::Uninitialized(self.rocket),
-            config: self.config,
+            lazy_client: Arc::new(Mutex::new(LazyClient::Uninitialized(Some(self.rocket)))),
+            config: Arc::new(self.config),
         }
     }
 
@@ -58,12 +65,12 @@ impl RocketHandlerBuilder {
     ///
     /// ```rust,no_run
     /// use rocket_lamb::RocketExt;
-    /// use lambda_http::lambda;
+    /// use lamedh_http::lambda::lambda;
     ///
-    /// rocket::ignite().lambda().launch();
+    /// tokio_test::block_on(rocket::ignite().lambda().launch());
     /// ```
-    pub fn launch(self) -> ! {
-        lambda!(self.into_handler());
+    pub async fn launch(self) -> ! {
+        run(handler(self.into_handler().await)).await.unwrap();
         unreachable!("lambda! should loop forever (or panic)")
     }
 
