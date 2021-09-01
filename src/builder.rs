@@ -9,6 +9,7 @@ use crate::config::*;
 use crate::handler::RocketHandler;
 use crate::LazyClient;
 
+
 /// A builder to create and configure a [RocketHandler](RocketHandler).
 pub struct RocketHandlerBuilder {
     rocket: Rocket<Build>,
